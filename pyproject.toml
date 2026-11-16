@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "psmp"
+version = "0.1.0"
+description = "Power-Saving Management for Parked vehicles (PSMP) with Jev Local Decision AI & ROC Sensitivity Tuning"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26.0",
+    "pandas>=2.1.0",
+    "scipy>=1.11.0",
+    "scikit-learn>=1.3.0",
+    "matplotlib>=3.8.0",
+    "plotly>=5.18.0",
+    "streamlit>=1.30.0",
+    "requests>=2.31.0",
+    "onnxruntime>=1.16.0",
+    "lightgbm>=4.3.0",
+]
+
+[project.optional-dependencies]
+jev = ["edgejev", "tinyjev"]
+dev = ["pytest>=7.4.0"]

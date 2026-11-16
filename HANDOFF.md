@@ -56,14 +56,27 @@ python evaluate_coldstart_strategies.py
 
 ---
 
-## 3. okuya-x1c の Antigravity でのプロンプト例
+## 3. okuya-x1c での作業実績と完了ステータス（2026-11-16）
 
-okuya-x1c で Antigravity を開いた後、以下のプロンプトをそのまま送信することで、コンテキストを即座に再開できます。
+### (1) 本番コアモジュールへの統合完了
+- `psmp/config.py`: 滞在時間カテゴリ分類関数 `classify_stay_duration_category`（QUICK/MEDIUM/LONG）および POI デフォルトカテゴリ判定 `get_poi_default_category` を追加。
+- `psmp/phase1_collector_learner.py`:
+  - `Phase1CollectorLearner.fit()` でドライバごとの滞在カテゴリ別ECDF `driver_category_durations` および全出先滞在時間 `driver_global_durations` を自動学習・保持。
+  - `predict_stay_distribution()` において、未訪問先（Cold-start）や学習データ不足時に、目的地種別/カーナビジャンルに応じた「ドライバ別カテゴリECDF」を自動生成するフォールバックロジックを統合。
+- 実データ（`syn548_profile_v4`）の未訪問50セッションによる再検証（`verify_integrated_coldstart.py`）:
+  - **ROC-AUC: 0.8106**（従来ベースライン 0.4959）
+  - **Brier スコア: 0.0477**（従来 0.1243）
+  - **レディ達成率: 80.1%**、**省電力率: 47.8%**（平均消費 1782.9 Wh）
+  - 完全オフライン（他車通信不要）での高精度制御がコアモジュール単体で再現されることを確認。
 
-```text
-okuya-x1pro-ubuntu で行っていた PSMP プロジェクトの作業を okuya-x1c で継続します。
-リポジトリ内の HANDOFF.md を確認してください。
-直近では実データ（syn548_profile_v4_train/eval.csv.gz）を用いて、
-未訪問先（Cold-start）における「①改良版：ドライバ別カテゴリECDF」が ROC-AUC 0.8106、レディ達成率 80.1% を達成したところです。
-この成果を踏まえ、次のステップ（例: 車載EdgeJevへの本番モジュール統合、あるいはUIアプリとの連携）を進めてください。
-```
+### (2) Streamlit UI アプリ (`app.py`) の拡張
+- **Tab 3**: 学習済み分布テーブルに加え、ドライバごとの滞在カテゴリ（QUICK/MEDIUM/LONG）の中央値・IQR・最小最大スパンを表示するインスペクタを追加。
+- **Tab 4 (新規)**: 「❄️ Cold-Start: 未訪問先 (初訪問POI) ＆ ナビカテゴリ連携」タブを追加。
+  - カーナビ目的地ジャンル（QUICK/MEDIUM/LONG）、実滞在時間、外気温、同乗者の設定から、従来 baseline（一律スペック）vs ドライバ別カテゴリECDF の確率推移・室温推移・消費電力をリアルタイム比較可能。
+  - 1,000台実データにおける5方式ベンチマーク比較表を提示。
+
+### (3) テストスイート拡充
+- `pyproject.toml`: setuptools のパッケージ探索設定を整備し、`pip install -e .` による editable インストールに対応。
+- `tests/test_coldstart.py`: 未訪問POIにおけるドライバ別カテゴリECDFの自動適用、生存関数ハザード計算、Phase 2/Phase 3 連携を検証するユニットテストを新設。
+- 全テスト（`pytest` 4件）が全て成功（PASSED）することを確認。
+

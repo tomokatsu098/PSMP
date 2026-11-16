@@ -15,6 +15,21 @@ class POIType( str, Enum ):
     GYM_CLINIC = "gym_clinic"                 # ジム・病院・習い事 (中時間: 60~90分)
 
 
+def classify_stay_duration_category(duration_minutes: float) -> str:
+    """
+    駐車滞在時間を 3 つのカテゴリに分類する:
+      - QUICK: <= 25 分 (コンビニ、給油、送迎など)
+      - MEDIUM: <= 90 分 (スーパー、買い物、外食など)
+      - LONG: > 90 分 (オフィス、レジャー、病院、半日用事など)
+    """
+    if duration_minutes <= 25.0:
+        return "QUICK"
+    elif duration_minutes <= 90.0:
+        return "MEDIUM"
+    return "LONG"
+
+
+
 @dataclass(frozen=True)
 class POIClusterSpec:
     poi_id: str
@@ -26,6 +41,20 @@ class POIClusterSpec:
     security_risk_level: float  # 0.0 (安全) ~ 1.0 (高リスク: Sentry優先度高)
     base_mean_minutes: float
     base_std_minutes: float
+
+
+def get_poi_default_category(poi: POIClusterSpec) -> str:
+    """
+    POIスペックの種別や滞在平均時間からデフォルトの滞在カテゴリを取得する
+    """
+    if poi.poi_type == POIType.CONVENIENCE_STORE:
+        return "QUICK"
+    elif poi.poi_type in (POIType.SUPERMARKET, POIType.GYM_CLINIC):
+        return "MEDIUM"
+    elif poi.poi_type in (POIType.RESTAURANT_LEISURE, POIType.OFFICE_WORK):
+        return "LONG" if poi.base_mean_minutes > 90.0 else "MEDIUM"
+    return classify_stay_duration_category(poi.base_mean_minutes)
+
 
 
 DEFAULT_POI_CLUSTERS: Dict[str, POIClusterSpec] = {

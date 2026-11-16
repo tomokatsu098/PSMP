@@ -24,3 +24,9 @@ dependencies = [
 [project.optional-dependencies]
 jev = ["edgejev", "tinyjev"]
 dev = ["pytest>=7.4.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["psmp*"]
+exclude = ["data*", "outputs*", "tests*"]
+

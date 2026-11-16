@@ -18,3 +18,7 @@ data/*.csv
 # Logs & temp
 *.log
 .DS_Store
+*.egg-info/
+build/
+dist/
+

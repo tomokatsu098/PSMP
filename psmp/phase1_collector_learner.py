@@ -22,7 +22,10 @@ from psmp.config import (
     DEFAULT_POI_CLUSTERS,
     DriverPreferenceProfile,
     POIClusterSpec,
+    classify_stay_duration_category,
+    get_poi_default_category,
 )
+
 
 
 @dataclass
@@ -84,6 +87,10 @@ class Phase1CollectorLearner:
         self.history_records: List[ParkingEventRecord] = []
         self.learned_stats: Dict[Tuple[Any, ...], LearnedStayDistribution] = {}
         self.fallback_poi_stats: Dict[Tuple[str, str], LearnedStayDistribution] = {}
+        # Cold-start（未学習POI/初訪問先）向けドライバ別カテゴリECDF & グローバル滞在時間
+        self.driver_category_durations: Dict[Tuple[str, str], np.ndarray] = {}
+        self.driver_global_durations: Dict[str, np.ndarray] = {}
+
 
     def resolve_nearest_poi(self, lat: float, lon: float) -> POIClusterSpec:
         """
@@ -267,11 +274,15 @@ class Phase1CollectorLearner:
 
     def fit(self, records: List[ParkingEventRecord]) -> None:
         """
-        収集した駐車履歴データから、条件別の滞在時間分布（中央値・ロバスト分散・分位点・ECDFデータ）を学習する
+        収集した駐車履歴データから、条件別の滞在時間分布（中央値・ロバスト分散・分位点・ECDFデータ）を学習する。
+        さらに、未訪問先（Cold-start）向けにドライバごとの滞在時間カテゴリ別ECDF（個人癖×場所種別）および
+        全出先滞在時間を構築・保持する。
         """
         self.history_records = list(records)
         grouped: Dict[Tuple[Any, ...], List[float]] = {}
         fallback_grouped: Dict[Tuple[str, str], List[float]] = {}
+        driver_cat_map: Dict[Tuple[str, str], List[float]] = {}
+        driver_all_map: Dict[str, List[float]] = {}
 
         for rec in records:
             tb = self.time_bucket(rec.hour_of_day)
@@ -280,6 +291,11 @@ class Phase1CollectorLearner:
 
             fb_key = (rec.driver_id, rec.poi_id)
             fallback_grouped.setdefault(fb_key, []).append(rec.duration_minutes)
+
+            # Cold-start 向けドライバ別カテゴリ（QUICK/MEDIUM/LONG）および全出先滞在時間
+            cat = classify_stay_duration_category(rec.duration_minutes)
+            driver_cat_map.setdefault((rec.driver_id, cat), []).append(rec.duration_minutes)
+            driver_all_map.setdefault(rec.driver_id, []).append(rec.duration_minutes)
 
         self.learned_stats.clear()
         for key, durations in grouped.items():
@@ -317,6 +333,14 @@ class Phase1CollectorLearner:
                 raw_durations=arr,
             )
 
+        self.driver_category_durations.clear()
+        for cat_key, cat_durations in driver_cat_map.items():
+            self.driver_category_durations[cat_key] = np.sort(np.array(cat_durations, dtype=np.float64))
+
+        self.driver_global_durations.clear()
+        for drv_id, all_durations in driver_all_map.items():
+            self.driver_global_durations[drv_id] = np.sort(np.array(all_durations, dtype=np.float64))
+
     def predict_stay_distribution(
         self,
         driver_id: str,
@@ -325,9 +349,13 @@ class Phase1CollectorLearner:
         park_start_dt: datetime,
         is_holiday: bool,
         has_passengers: bool,
+        target_category: Optional[str] = None,
     ) -> Tuple[POIClusterSpec, LearnedStayDistribution]:
         """
-        新しい駐車イベント発生時に、座標・日時・同乗者有無から滞在時間の予測分布を返す
+        新しい駐車イベント発生時に、座標・日時・同乗者有無から滞在時間の予測分布を返す。
+        - 既知のPOIクラスタで十分な履歴がある場合は、ベイズ縮小推定による条件別ECDF分布を使用。
+        - 未学習POI（Cold-start）またはサンプル数不足の場合は、目的地の種別/ナビジャンルに応じた
+          「ドライバ別カテゴリECDF（個人癖×場所種別）」を自動適用する。
         """
         poi = self.resolve_nearest_poi(lat, lon)
         tb = self.time_bucket(park_start_dt.hour)
@@ -353,10 +381,32 @@ class Phase1CollectorLearner:
                 confidence_weight=exact_dist.confidence_weight,
                 raw_durations=raw_durs,
             )
-        elif fb_dist is not None:
+        elif fb_dist is not None and fb_dist.sample_count >= 3:
             return poi, fb_dist
 
-        # 未学習POIの場合はPOI基本スペックを返す
+        # Cold-start（未学習POI / 初訪問先）: ドライバ別カテゴリECDFを適用
+        cat = target_category or get_poi_default_category(poi)
+        cat_durs = self.driver_category_durations.get((driver_id, cat))
+        if cat_durs is None or len(cat_durs) < 2:
+            cat_durs = self.driver_global_durations.get(driver_id)
+
+        if cat_durs is not None and len(cat_durs) >= 2:
+            p50 = float(np.percentile(cat_durs, 50))
+            p25 = float(np.percentile(cat_durs, 25))
+            p75 = float(np.percentile(cat_durs, 75))
+            iqr = max(5.0, (p75 - p25) / 1.349)
+            return poi, LearnedStayDistribution(
+                mean_minutes=round(p50, 2),
+                std_minutes=round(iqr, 2),
+                p10_minutes=round(float(np.percentile(cat_durs, 10)), 2),
+                p50_minutes=round(p50, 2),
+                p90_minutes=round(float(np.percentile(cat_durs, 90)), 2),
+                sample_count=len(cat_durs),
+                confidence_weight=0.80,
+                raw_durations=cat_durs,
+            )
+
+        # 履歴が一切ない初期状態の場合はPOI基本スペックを返す
         return poi, LearnedStayDistribution(
             mean_minutes=poi.base_mean_minutes,
             std_minutes=poi.base_std_minutes,

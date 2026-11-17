@@ -14,6 +14,9 @@ ENV/
 # Large raw CSV files (keep gzip compressed versions only)
 data/*.csv
 !data/*.csv.gz
+past_materials/*.csv
+past_materials/*:Zone.Identifier
+past_materials/*:com.dropbox.attrs
 
 # Logs & temp
 *.log

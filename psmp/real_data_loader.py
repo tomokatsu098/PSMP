@@ -143,8 +143,8 @@ class RealTripDataLoader:
                     base_m = 480.0
                 elif prev_loc == "自宅":
                     poi_id = f"POI_{vid}_HOME"
-                    poi_type = POIType.OFFICE_WORK
-                    sec_risk = 0.10
+                    poi_type = POIType.HOME
+                    sec_risk = 0.05
                     base_m = 720.0
                 else:
                     poi_id = f"POI_{vid}_{p_lat:.2f}_{p_lon:.2f}"
@@ -187,6 +187,7 @@ class RealTripDataLoader:
                     initial_soc_pct=72.0,
                     distance_to_home_km=dist_home,
                     anomaly_type="normal",
+                    is_home=(prev_loc == "自宅"),
                 )
                 records.append(record)
 

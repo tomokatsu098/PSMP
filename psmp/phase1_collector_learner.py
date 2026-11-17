@@ -22,6 +22,7 @@ from psmp.config import (
     DEFAULT_POI_CLUSTERS,
     DriverPreferenceProfile,
     POIClusterSpec,
+    POIType,
     classify_stay_duration_category,
     get_poi_default_category,
 )
@@ -50,6 +51,7 @@ class ParkingEventRecord:
     initial_soc_pct: float         # 駐車開始時のバッテリーSoC (%)
     distance_to_home_km: float     # 自宅までの距離 (km)
     anomaly_type: str = "normal"   # "normal" | "early_return" | "unexpected_delay" | "extreme_weather"
+    is_home: bool = False          # 自宅駐車フラグ
 
 
 @dataclass
@@ -89,6 +91,8 @@ class Phase1CollectorLearner:
         self.fallback_poi_stats: Dict[Tuple[str, str], LearnedStayDistribution] = {}
         # Cold-start（未学習POI/初訪問先）向けドライバ別カテゴリECDF & グローバル滞在時間
         self.driver_category_durations: Dict[Tuple[str, str], np.ndarray] = {}
+        self.driver_home_durations: Dict[str, np.ndarray] = {}
+        self.driver_out_durations: Dict[str, np.ndarray] = {}
         self.driver_global_durations: Dict[str, np.ndarray] = {}
 
 
@@ -130,7 +134,9 @@ class Phase1CollectorLearner:
         rng = np.random.default_rng(seed)
         records: List[ParkingEventRecord] = []
         base_date = datetime(2026, 6, 1, 8, 0, 0)
-        poi_list = list(self.poi_clusters.values())
+        poi_list = [p for p in self.poi_clusters.values() if p.poi_type != POIType.HOME]
+        if not poi_list:
+            poi_list = list(self.poi_clusters.values())
 
         session_idx = 0
         for driver_id, profile in self.driver_profiles.items():
@@ -227,6 +233,7 @@ class Phase1CollectorLearner:
                         initial_soc_pct=initial_soc,
                         distance_to_home_km=poi.distance_to_home_km,
                         anomaly_type=anomaly_type,
+                        is_home=(poi.poi_type == POIType.HOME or poi.distance_to_home_km <= 0.05),
                     )
                 )
 
@@ -275,13 +282,15 @@ class Phase1CollectorLearner:
     def fit(self, records: List[ParkingEventRecord]) -> None:
         """
         収集した駐車履歴データから、条件別の滞在時間分布（中央値・ロバスト分散・分位点・ECDFデータ）を学習する。
-        さらに、未訪問先（Cold-start）向けにドライバごとの滞在時間カテゴリ別ECDF（個人癖×場所種別）および
+        さらに、未訪問先（Cold-start）向けにドライバごとの滞在時間カテゴリ別ECDF（自宅/出先×個人癖×場所種別）および
         全出先滞在時間を構築・保持する。
         """
         self.history_records = list(records)
         grouped: Dict[Tuple[Any, ...], List[float]] = {}
         fallback_grouped: Dict[Tuple[str, str], List[float]] = {}
         driver_cat_map: Dict[Tuple[str, str], List[float]] = {}
+        driver_home_map: Dict[str, List[float]] = {}
+        driver_out_map: Dict[str, List[float]] = {}
         driver_all_map: Dict[str, List[float]] = {}
 
         for rec in records:
@@ -292,9 +301,15 @@ class Phase1CollectorLearner:
             fb_key = (rec.driver_id, rec.poi_id)
             fallback_grouped.setdefault(fb_key, []).append(rec.duration_minutes)
 
-            # Cold-start 向けドライバ別カテゴリ（QUICK/MEDIUM/LONG）および全出先滞在時間
-            cat = classify_stay_duration_category(rec.duration_minutes)
+            # 自宅と出先の分別: Cold-start 向けドライバ別カテゴリECDF
+            is_home = getattr(rec, "is_home", False) or (rec.distance_to_home_km <= 0.05) or ("HOME" in getattr(rec, "poi_id", ""))
+            cat = classify_stay_duration_category(rec.duration_minutes, is_home=is_home)
             driver_cat_map.setdefault((rec.driver_id, cat), []).append(rec.duration_minutes)
+
+            if is_home:
+                driver_home_map.setdefault(rec.driver_id, []).append(rec.duration_minutes)
+            else:
+                driver_out_map.setdefault(rec.driver_id, []).append(rec.duration_minutes)
             driver_all_map.setdefault(rec.driver_id, []).append(rec.duration_minutes)
 
         self.learned_stats.clear()
@@ -336,6 +351,14 @@ class Phase1CollectorLearner:
         self.driver_category_durations.clear()
         for cat_key, cat_durations in driver_cat_map.items():
             self.driver_category_durations[cat_key] = np.sort(np.array(cat_durations, dtype=np.float64))
+
+        self.driver_home_durations.clear()
+        for drv_id, home_durations in driver_home_map.items():
+            self.driver_home_durations[drv_id] = np.sort(np.array(home_durations, dtype=np.float64))
+
+        self.driver_out_durations.clear()
+        for drv_id, out_durations in driver_out_map.items():
+            self.driver_out_durations[drv_id] = np.sort(np.array(out_durations, dtype=np.float64))
 
         self.driver_global_durations.clear()
         for drv_id, all_durations in driver_all_map.items():
@@ -385,10 +408,16 @@ class Phase1CollectorLearner:
             return poi, fb_dist
 
         # Cold-start（未学習POI / 初訪問先）: ドライバ別カテゴリECDFを適用
+        is_home = (poi.poi_type == POIType.HOME) or (poi.distance_to_home_km <= 0.05) or ("HOME" in poi.poi_id)
         cat = target_category or get_poi_default_category(poi)
         cat_durs = self.driver_category_durations.get((driver_id, cat))
         if cat_durs is None or len(cat_durs) < 2:
-            cat_durs = self.driver_global_durations.get(driver_id)
+            if is_home:
+                cat_durs = self.driver_home_durations.get(driver_id)
+            else:
+                cat_durs = self.driver_out_durations.get(driver_id)
+            if cat_durs is None or len(cat_durs) < 2:
+                cat_durs = self.driver_global_durations.get(driver_id)
 
         if cat_durs is not None and len(cat_durs) >= 2:
             p50 = float(np.percentile(cat_durs, 50))

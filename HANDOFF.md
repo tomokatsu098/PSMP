@@ -80,3 +80,54 @@ python evaluate_coldstart_strategies.py
 - `tests/test_coldstart.py`: 未訪問POIにおけるドライバ別カテゴリECDFの自動適用、生存関数ハザード計算、Phase 2/Phase 3 連携を検証するユニットテストを新設。
 - 全テスト（`pytest` 4件）が全て成功（PASSED）することを確認。
 
+---
+
+## 4. okuya-x1c での委託元要求分析・仕様策定・実装実績（2026-11-17）
+
+### (1) 委託元要求事項とベースライン (`deep7.py`) の解析
+- 委託元資料（`past_materials/電力マネジメント_技術概要.pptx`、`deep7.py`）を徹底調査。
+- **背景と目的**: 30日放置での補機バッテリあがり防止、補機1サイズUP（2,000円/台）回避のための **暗電流5mA以上削減**。
+- **目標値**: 長期駐車（3日以上）で **DeepSleep 7.0 h/台日 以上** かつ **ドア解錠遅延率 1.2% 以下**（年間1,000回中月1回まで）。
+- **委託元の課題**: `deep7.py` は全体一律閾値・ガードなしのベースラインであり、「全車で達成」やマイコン適合、突発利用の分離が未達。
+
+### (2) 自宅（HOME）と出先（OUT）の完全分別アーキテクチャ実装
+- 出先の短時間・中時間滞在分布と、自宅の夜間睡眠（8〜16h）や長期放置（3日以上）が混在するとECDFが歪むため、2層構造に完全分離。
+  - **`HOME_OVERNIGHT`**: <= 24h（夜間即時DeepSleep突入）
+  - **`HOME_LONG`**: > 24h（3日以上長期放置ターゲット）
+  - **`QUICK` / `MEDIUM` / `LONG`**: 出先駐車用
+- `psmp/config.py`: `POIType.HOME` 追加、`classify_stay_duration_category` の `is_home` 対応。
+- `psmp/phase1_collector_learner.py`: `driver_home_durations` / `driver_out_durations` 専用プールの新設、自宅フォールバック統合。
+- `psmp/real_data_loader.py`: `prev_loc == "自宅"` のタグ付け対応。
+- `tests/test_coldstart.py`: 自宅と出先の分別ユニットテストを新設し、**全5テスト全て PASSED**。
+
+### (3) 電力マネジメント仕様策定
+- **ユースケース体系＆星取り表**: 委託元（暗電流37mAカットのみ）vs PSMP（高圧連携、Re-sleep、SoCガード、マイコン超軽量化）の優位性を整理。
+- **省電力モード状態遷移表**: S0(Drive), S1(Pre-con), S2(Normal Sleep), S3(DeepSleep), S4(Emergency Cut) の遷移条件と安全弁を定義。
+- **入力データ構造**: 1,000台、548日、Aグループ（103台: 高難度通勤型）vs Bグループ（897台: 日常生活圏型）の理由と内訳を整理。
+- **ユーザの嬉しさ評価指標**: ワンアクション解錠率（$\ge 98.8\%$）、30日始動率（$100\%$）、無充電帰還率（$100\%$）、快適性スコア（$\ge 80$点）。
+- **UI/UX役割分担**: 車載AAOS（確認・最小限） vs スマホ/自宅PC（リモート把握・安心スイッチ・詳細設定）。
+- 詳細仕様書: [`docs/POWER_MANAGEMENT_SPEC.md`](docs/POWER_MANAGEMENT_SPEC.md) を新設。
+
+---
+
+## 5. 今夜 okuya-x1pro-ubuntu 側での作業タスク（ToDoリスト）
+
+夜間、母艦 `okuya-x1pro-ubuntu` で作業を再開する際は、以下のステップで進めてください。
+
+### (1) 環境同期と健全性確認
+```bash
+cd ~/develop/PSMP  # または ~/git/PSMP
+git pull origin main
+source .venv/bin/activate
+pytest -v  # 5件すべてパスすることを確認
+```
+
+### (2) 委託元クライテリア達成に向けた実装＆評価タスク
+1. **長期駐車（3日以上 / `HOME_LONG`）専用ロジックの評価スクリプト作成**:
+   - `data/syn548_profile_v4_eval.csv.gz`（または全1,000台データ）を対象に、`HOME_LONG` セッションで「DeepSleep 7.0 h/台日 以上 かつ 解錠遅延 1.2% 以下」が**全車で達成できているか**を検証する評価コードを作成。
+2. **突発利用（段階2）の定量的定義と理論上限値の導出**:
+   - 「過去実績のない時間帯・遠隔地」を突発利用として定義。
+   - 突発利用を除外した際、遅延0件でDeepSleepが理論上何時間まで伸ばせるかを算出。
+3. **委託元提出用検討書（①〜⑤）の下書き作成**:
+   - `docs/POWER_MANAGEMENT_SPEC.md` の内容をベースに、委託元への提出成果物（入力成形、モデル選定、判断ロジック、個人適応、システム方式）の構成案を作成。
+

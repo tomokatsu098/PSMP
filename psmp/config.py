@@ -8,6 +8,7 @@ from typing import Dict, List, Tuple
 
 
 class POIType( str, Enum ):
+    HOME = "home"                             # 自宅 (長大時間: 8~14h または 24h超長期)
     CONVENIENCE_STORE = "convenience_store"   # コンビニ (短時間: 10~15分)
     SUPERMARKET = "supermarket"               # スーパー・買い物 (中時間: 35~60分)
     RESTAURANT_LEISURE = "restaurant_leisure" # レストラン・映画・レジャー (中長時間: 70~140分)
@@ -15,13 +16,22 @@ class POIType( str, Enum ):
     GYM_CLINIC = "gym_clinic"                 # ジム・病院・習い事 (中時間: 60~90分)
 
 
-def classify_stay_duration_category(duration_minutes: float) -> str:
+def classify_stay_duration_category(duration_minutes: float, is_home: bool = False) -> str:
     """
-    駐車滞在時間を 3 つのカテゴリに分類する:
-      - QUICK: <= 25 分 (コンビニ、給油、送迎など)
-      - MEDIUM: <= 90 分 (スーパー、買い物、外食など)
-      - LONG: > 90 分 (オフィス、レジャー、病院、半日用事など)
+    駐車滞在時間を自宅/出先および時間幅に応じて分類する:
+      - 自宅 (is_home=True):
+        - HOME_OVERNIGHT: <= 24 時間 (1440分) - 日常の帰宅・夜間駐車
+        - HOME_LONG: > 24 時間 (1440分) - 週末放置や数日以上の長期駐車 (委託元の3日以上長期ターゲット含む)
+      - 出先 (is_home=False):
+        - QUICK: <= 25 分 (コンビニ、給油、送迎など)
+        - MEDIUM: <= 90 分 (スーパー、買い物、外食など)
+        - LONG: > 90 分 (オフィス、レジャー、病院、半日用事など)
     """
+    if is_home:
+        if duration_minutes <= 1440.0:  # 24時間以内
+            return "HOME_OVERNIGHT"
+        return "HOME_LONG"
+
     if duration_minutes <= 25.0:
         return "QUICK"
     elif duration_minutes <= 90.0:
@@ -47,17 +57,30 @@ def get_poi_default_category(poi: POIClusterSpec) -> str:
     """
     POIスペックの種別や滞在平均時間からデフォルトの滞在カテゴリを取得する
     """
-    if poi.poi_type == POIType.CONVENIENCE_STORE:
+    if poi.poi_type == POIType.HOME or poi.distance_to_home_km <= 0.05:
+        return "HOME_OVERNIGHT"
+    elif poi.poi_type == POIType.CONVENIENCE_STORE:
         return "QUICK"
     elif poi.poi_type in (POIType.SUPERMARKET, POIType.GYM_CLINIC):
         return "MEDIUM"
     elif poi.poi_type in (POIType.RESTAURANT_LEISURE, POIType.OFFICE_WORK):
         return "LONG" if poi.base_mean_minutes > 90.0 else "MEDIUM"
-    return classify_stay_duration_category(poi.base_mean_minutes)
+    return classify_stay_duration_category(poi.base_mean_minutes, is_home=(poi.poi_type == POIType.HOME))
 
 
 
 DEFAULT_POI_CLUSTERS: Dict[str, POIClusterSpec] = {
+    "POI_HOME_00": POIClusterSpec(
+        poi_id="POI_HOME_00",
+        name_ja="自宅ガレージ・専用駐車場",
+        poi_type=POIType.HOME,
+        lat=35.6800,
+        lon=139.7600,
+        distance_to_home_km=0.0,
+        security_risk_level=0.05,
+        base_mean_minutes=720.0,
+        base_std_minutes=120.0,
+    ),
     "POI_CONV_01": POIClusterSpec(
         poi_id="POI_CONV_01",
         name_ja="セブンイレブン（幹線道路沿い）",

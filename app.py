@@ -582,6 +582,17 @@ def main():
         col_em1, col_em2 = st.columns([1, 1])
         with col_em1:
             st.markdown("##### 🚗 車両駐車コンテキスト入力")
+            sim_ptype = st.selectbox(
+                "⚡ パワートレイン種別",
+                ["BEV", "PHEV", "HEV", "ICE"],
+                index=0,
+                format_func=lambda x: {
+                    "BEV": "BEV (電気自動車: 60kWh大容量 + 12V補機 / DC-DC補充電連動)",
+                    "PHEV": "PHEV (プラグインHV: 15kWh中容量 + ガソリン自走可能)",
+                    "HEV": "HEV (ストロングHV: 1.8kWh小型高圧 + 12V鉛 / 高圧プレ空調不可)",
+                    "ICE": "ICE (ガソリン/ディーゼル: 12V鉛のみ / セル始動性死守)",
+                }[x]
+            )
             sim_cat = st.selectbox(
                 "滞在カテゴリ",
                 ["HOME_OVERNIGHT", "HOME_LONG", "QUICK", "MEDIUM", "LONG"],
@@ -613,14 +624,26 @@ def main():
                 idx_w = bisect.bisect_right(sample_durations, sim_elapsed + 60)
                 hazard_pct = min(100.0, ((idx_w - idx_t) / survival) * 100.0)
 
-            # ガード判定
-            if sim_soc <= 20:
+            # パワートレイン連動型ガード判定
+            if sim_ptype == "BEV" and sim_soc <= 20:
                 rec_state = "S4 (Dormant / 完全休眠)"
-                rec_reason = "GUARD_CRITICAL_SOC_DORMANT (残量20%以下で電欠・バッテリ上がり完全防止)"
+                rec_reason = "GUARD_BEV_DCDC_CUTOFF (高圧20%以下で車載DC-DC 12V自動充電停止リスク・電欠防止のため即時S4休眠)"
                 badge_color = "red"
-            elif sim_soc <= 30:
+            elif sim_ptype == "ICE" and sim_soc <= 40:
+                rec_state = "S4 (Dormant / 完全休眠)"
+                rec_reason = "GUARD_ICE_CRANKING_SAFETY (12V鉛バッテリ始動限界SoC40%・セルモータークランキング電流死守)"
+                badge_color = "red"
+            elif sim_ptype == "HEV" and sim_soc <= 30:
+                rec_state = "S4 (Dormant / 完全休眠)"
+                rec_reason = "GUARD_HEV_12V_DEPLETION (高圧1.8kWh補充電不可・12V暗電流上がり防止)"
+                badge_color = "red"
+            elif sim_ptype == "PHEV" and sim_soc <= 15:
                 rec_state = "S3 (DeepSleep Guarded / 強制ディープスリープ)"
-                rec_reason = "GUARD_LOW_SOC_ENFORCED_DEEPSLEEP (残量30%以下で強制省電力)"
+                rec_reason = "GUARD_PHEV_EV_CUTOFF (EV用SoC15%下限・ガソリン自走可能だが12V共倒れ防止で強制スリープ)"
+                badge_color = "orange"
+            elif sim_soc <= 25:
+                rec_state = "S3 (DeepSleep Guarded / 強制ディープスリープ)"
+                rec_reason = "GUARD_LOW_SOC_ENFORCED_DEEPSLEEP (残量25%以下で強制省電力)"
                 badge_color = "orange"
             elif not sim_unlocked and sim_wake_min >= 15:
                 rec_state = "S2 (DeepSleep / ディープスリープ)"

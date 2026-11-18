@@ -16,6 +16,20 @@ class POIType( str, Enum ):
     GYM_CLINIC = "gym_clinic"                 # ジム・病院・習い事 (中時間: 60~90分)
 
 
+class PowertrainType(str, Enum):
+    """
+    車両パワートレイン種別:
+      - BEV: 純電気自動車 (40~100kWh 大容量高圧バッテリ + 12V補機。高圧SoCによる12V自動充電連動)
+      - PHEV: プラグインハイブリッド (10~20kWh 中容量高圧バッテリ + 12V補機 + ICE。ガソリン自走可能だが12V枯渇防止)
+      - HEV: ストロングハイブリッド (1~2kWh 小容量高圧バッテリ + 12V補機 + ICE。高圧プレ空調不可・12V暗電流最小化が命)
+      - ICE: 内燃機関車 (ガソリン/ディーゼル、12V鉛バッテリのみ。セル始動性死守・プレ空調なし・DeepSleep最大化)
+    """
+    BEV = "bev"
+    PHEV = "phev"
+    HEV = "hev"
+    ICE = "ice"
+
+
 def classify_stay_duration_category(duration_minutes: float, is_home: bool = False) -> str:
     """
     駐車滞在時間を自宅/出先および時間幅に応じて分類する:
@@ -142,33 +156,40 @@ DEFAULT_POI_CLUSTERS: Dict[str, POIClusterSpec] = {
 @dataclass
 class DriverPreferenceProfile:
     """
-    ドライバごとの個人嗜好とEVバッテリーマネジメントのトレードオフ設定
+    ドライバごとの個人嗜好と車両パワートレイン・バッテリーマネジメントのトレードオフ設定
     """
     driver_id: str
     name_ja: str
     description_ja: str
+    # パワートレイン種別 (BEV, PHEV, HEV, ICE)
+    powertrain_type: PowertrainType = PowertrainType.BEV
     # 0.0 = 途中充電やむなし・快適性最優先, 1.0 = 絶対に自宅まで無充電で帰りたい（電費最優先）
-    home_charge_priority_alpha: float
+    home_charge_priority_alpha: float = 0.50
     # 0.0 = 室温にこだわらない, 1.0 = 夏場の冷房・冬場の暖房による入車時快適性を最優先
-    comfort_priority_beta: float
+    comfort_priority_beta: float = 0.50
     # 途中充電を許容するか (True: 快適性のためなら途中経路での急速充電を許容)
-    allow_enroute_charging: bool
+    allow_enroute_charging: bool = False
     # ROC感度特性に基づく復帰判定閾値 θ (0.0 ~ 1.0)
     # 低いほど「早めに・高感度で機器をレディ復帰」(TPR高・FPR高)、高いほど「確実な時のみ復帰」(省電力・FPR低)
     roc_threshold_theta: float = 0.45
     # 自宅帰還時に最低限残しておきたいバッテリー安全マージン SoC (%)
     min_home_arrival_soc_pct: float = 12.0
-    # 車両バッテリー総容量 (kWh) - 例: EV 60kWh / PHEV 13.6kWh
+    # 車両バッテリー総容量 (kWh) - 例: EV 60kWh / PHEV 13.6kWh / HEV 1.8kWh / ICE 0.72kWh(12V 60Ah)
     battery_capacity_kwh: float = 60.0
-    # 平均電費 (km / kWh)
+    # 平均電費 (km / kWh) または 相当燃費
     efficiency_km_per_kwh: float = 6.5
+    # 12V補機バッテリー容量 (Ah)
+    auxiliary_12v_capacity_ah: float = 60.0
+    # 高圧バッテリーから12V補機への駐車中自動DC-DC充電に対応しているか
+    supports_auto_dcdc_charging: bool = True
 
 
 DEFAULT_DRIVER_PROFILES: Dict[str, DriverPreferenceProfile] = {
     "DRV_A_ECO_HOME": DriverPreferenceProfile(
         driver_id="DRV_A_ECO_HOME",
-        name_ja="ドライバA（自宅充電こだわり・電費優先派）",
-        description_ja="自宅ソーラー・夜間電力で充電するため、出先での途中充電を嫌い、無充電帰宅を最優先する。",
+        name_ja="ドライバA（自宅充電こだわり・電費優先派・BEV）",
+        description_ja="自宅ソーラー・夜間電力で充電するため、出先での途中充電を嫌い、無充電帰宅を最優先するBEVドライバ。",
+        powertrain_type=PowertrainType.BEV,
         home_charge_priority_alpha=0.85,
         comfort_priority_beta=0.35,
         allow_enroute_charging=False,
@@ -176,11 +197,13 @@ DEFAULT_DRIVER_PROFILES: Dict[str, DriverPreferenceProfile] = {
         min_home_arrival_soc_pct=15.0,
         battery_capacity_kwh=60.0,
         efficiency_km_per_kwh=6.8,
+        supports_auto_dcdc_charging=True,
     ),
     "DRV_B_COMFORT_FIRST": DriverPreferenceProfile(
         driver_id="DRV_B_COMFORT_FIRST",
-        name_ja="ドライバB（車内快適性最優先・途中充電許容派）",
-        description_ja="夏場の冷房・冬場の暖房で快適に入車することを最優先し、必要なら帰路での継ぎ足し充電も厭わない。",
+        name_ja="ドライバB（車内快適性最優先・途中充電許容派・BEV）",
+        description_ja="夏場の冷房・冬場の暖房で快適に入車することを最優先し、必要なら帰路での継ぎ足し充電も厭わないBEVドライバ。",
+        powertrain_type=PowertrainType.BEV,
         home_charge_priority_alpha=0.20,
         comfort_priority_beta=0.90,
         allow_enroute_charging=True,
@@ -188,18 +211,49 @@ DEFAULT_DRIVER_PROFILES: Dict[str, DriverPreferenceProfile] = {
         min_home_arrival_soc_pct=8.0,
         battery_capacity_kwh=60.0,
         efficiency_km_per_kwh=6.2,
+        supports_auto_dcdc_charging=True,
     ),
     "DRV_C_PHEV_BALANCED": DriverPreferenceProfile(
         driver_id="DRV_C_PHEV_BALANCED",
-        name_ja="ドライバC（プリウスPHEV想定・バランス＆同乗者配慮派）",
-        description_ja="普段はEV走行で自宅帰還を目指すが、家族（同乗者）がいる時や猛暑・厳冬時は快適性を優先する。",
+        name_ja="ドライバC（プリウスPHEV想定・バランス＆同乗者配慮派・PHEV）",
+        description_ja="普段はEV走行で自宅帰還を目指すが、ガソリン自走可能なため電欠耐性が高く、猛暑・厳冬時は快適性を優先する。",
+        powertrain_type=PowertrainType.PHEV,
         home_charge_priority_alpha=0.55,
         comfort_priority_beta=0.65,
         allow_enroute_charging=False,
         roc_threshold_theta=0.45,
         min_home_arrival_soc_pct=12.0,
-        battery_capacity_kwh=15.0,  # PHEV容量または短距離EV想定
+        battery_capacity_kwh=15.0,  # PHEV容量
         efficiency_km_per_kwh=7.2,
+        supports_auto_dcdc_charging=True,
+    ),
+    "DRV_D_HEV_STANDARD": DriverPreferenceProfile(
+        driver_id="DRV_D_HEV_STANDARD",
+        name_ja="ドライバD（アクア/プリウスHEV想定・12V暗電流死守・HEV）",
+        description_ja="1.8kWh小型高圧バッテリー＋12V鉛補機。高圧プレ空調は非装備、12V暗電流カットによる30日放置上がり防止を最優先。",
+        powertrain_type=PowertrainType.HEV,
+        home_charge_priority_alpha=0.50,
+        comfort_priority_beta=0.30,
+        allow_enroute_charging=False,
+        roc_threshold_theta=0.50,
+        min_home_arrival_soc_pct=20.0,
+        battery_capacity_kwh=1.8,   # HEV容量
+        efficiency_km_per_kwh=22.0, # km/L相当
+        supports_auto_dcdc_charging=False,
+    ),
+    "DRV_E_ICE_COMMUTER": DriverPreferenceProfile(
+        driver_id="DRV_E_ICE_COMMUTER",
+        name_ja="ドライバE（ガソリン車・クランキング始動性最優先・ICE）",
+        description_ja="12V鉛バッテリーのみ搭載。セルモーター起動電流（数十〜数百A）を死守するため、駐車中はDeepSleep最大化を徹底。",
+        powertrain_type=PowertrainType.ICE,
+        home_charge_priority_alpha=0.50,
+        comfort_priority_beta=0.20,
+        allow_enroute_charging=False,
+        roc_threshold_theta=0.55,
+        min_home_arrival_soc_pct=30.0,
+        battery_capacity_kwh=0.72,  # 12V 60Ah = 約0.72kWh
+        efficiency_km_per_kwh=16.0, # km/L相当
+        supports_auto_dcdc_charging=False,
     ),
 }
 

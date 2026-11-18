@@ -16,7 +16,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from psmp.config import DEVICE_SPECS, DeviceHardwareSpec, DriverPreferenceProfile
+from psmp.config import DEVICE_SPECS, DeviceHardwareSpec, DriverPreferenceProfile, PowertrainType
 from psmp.models.jev_engine import JevDecisionEngine
 from psmp.models.lgbm_engine import LightGBMDecisionEngine
 from psmp.models.vehicle_devices import (
@@ -315,16 +315,42 @@ class Phase3ParkedMonitor:
                 # クールダウン中（一度予定超過でRe-sleepした直後）は無駄な再起動を抑制
                 in_cooldown = t < re_sleep_cooldown_until
 
-                # SoCが完全に帰還下限を割り込んだ場合（かつ途中充電非許容）は強制省電力カットオフ
-                if soc_margin <= 0.3 and not profile.allow_enroute_charging:
+                # パワートレイン別の安全弁・残量保護判定
+                ptype = profile.powertrain_type
+
+                # 1) BEV: 高圧SoC <= 20% で車載DC-DC 12V自動充電停止リスク -> 強制休眠 (S4 Dormant)
+                # 2) ICE/HEV: 高圧プレ空調不可・12V暗電流最小化優先
+                # 3) PHEV: 高圧SoC <= 15% でEV空調遮断 (自走はガソリンでバックアップ)
+                bev_dcdc_cutoff = (ptype == PowertrainType.BEV and state.soc_pct <= 20.0)
+                phev_low_soc_cutoff = (ptype == PowertrainType.PHEV and state.soc_pct <= 15.0)
+                general_soc_depleted = (soc_margin <= 0.3 and not profile.allow_enroute_charging)
+
+                if bev_dcdc_cutoff or phev_low_soc_cutoff or general_soc_depleted:
                     soc_guard_triggered = True
                     current_policy = PowerPolicyMode.EMERGENCY_SAVE
                     state.hvac_state = HVACState.OFF
                     state.batt_thermal_state = BatteryThermalState.OFF
                     state.sentry_state = SentryState.LOW_POWER_PIR
-                    if active_prob_ivi >= eff_theta:
+                    if active_prob_ivi >= eff_theta and not bev_dcdc_cutoff:
                         state.ivi_state = IVIState.STANDBY
+                    else:
+                        state.ivi_state = IVIState.DEEP_SLEEP
+                elif ptype in (PowertrainType.ICE, PowertrainType.HEV):
+                    # ICE / HEV: エンジン停止中の高圧空調・高圧温調は不可
+                    state.hvac_state = HVACState.OFF
+                    state.batt_thermal_state = BatteryThermalState.OFF
+                    state.sentry_state = SentryState.LOW_POWER_PIR
+                    # 12V系のスマートキー／IVI待受のみハザード予測で制御
+                    if active_prob_ivi >= max(0.15, eff_theta - 0.05) or pred_wake_hvac:
+                        if state.ivi_state == IVIState.DEEP_SLEEP:
+                            state.ivi_state = IVIState.WARM_BOOT
+                        elif state.ivi_state == IVIState.STANDBY:
+                            state.ivi_state = IVIState.READY
+                    elif state.ivi_active_minutes >= self.specs.ivi_max_hold_minutes and not pred_wake_hvac:
+                        state.ivi_state = IVIState.STANDBY
+                        state.ivi_active_minutes = 0.0
                 else:
+                    # BEV / PHEV (通常SoC)
                     # --- ① 空調 (HVAC) の復帰・Re-sleep 制御 ---
                     cabin_gap = abs(state.cabin_temp_c - state.target_cabin_temp_c)
                     ambient_gap = abs(state.ambient_temp_c - state.target_cabin_temp_c)

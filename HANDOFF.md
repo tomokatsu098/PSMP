@@ -145,3 +145,22 @@ pytest -v  # 全5件のユニットテストが全てPASSEDすることを確認
   - スライダー操作による Cortex-R52 リアルタイム推論＆状態遷移（S0〜S4）エミュレータ。
   - 1,000台全車評価データ（段階1・段階2達成率100%）のヒストグラム・データビューア。
 
+---
+
+## 7. okuya-x1c での作業実績（2026-11-18午後: パワートレイン別バッテリー保護仕様）
+
+### (1) パワートレイン種別（BEV / PHEV / HEV / ICE）の定義とプロファイル拡張
+- `psmp/config.py`: `PowertrainType` Enum（`BEV`, `PHEV`, `HEV`, `ICE`）を新設。
+- `DEFAULT_DRIVER_PROFILES` に `DRV_D_HEV_STANDARD` (HEV) および `DRV_E_ICE_COMMUTER` (ICE) を追加し、全パワートレインの諸元・バッテリー容量・ガード設定を完備。
+
+### (2) パワートレイン連動型安全弁・状態遷移ガードの実装
+- **`psmp/phase2_ig_off_planner.py` & `psmp/phase3_parked_monitor.py`**:
+  - **BEV (純電気自動車)**: 高圧SoC $\le 20\%$ で車載DC-DCによる12V自動充電停止リスク・電欠防止のため即時S4 (Dormant) 強制休眠へ移行。
+  - **PHEV (プラグインHV)**: 高圧SoC $\le 15\%$ でEVプレ空調を遮断。ガソリン自走可能により立ち往生リスクは低減しつつ、12V共倒れを防止。
+  - **HEV / ICE**: エンジン停止中の高圧空調・高圧温調は不可。12V暗電流最小化（スマートキー待受のDeepSleep化）に徹し、30日放置上がりおよびセルモーターのクランキング始動電流を死守。
+
+### (3) 詳細仕様書および Streamlit UI への反映
+- **仕様書**: [`docs/POWER_MANAGEMENT_SPEC.md`](docs/POWER_MANAGEMENT_SPEC.md) に第5.1章「パワートレイン別バッテリー保護仕様」を追加（保護マトリクス・マイコンシーケンス）。
+- **Streamlit UI (`app.py`)**: Tab 5 の Cortex-R52 エミュレータに「⚡ パワートレイン種別（BEV / PHEV / HEV / ICE）」のセレクトボックスを追加し、パワートレインに応じたガード発動（S0〜S4）をインタラクティブに検証可能に拡張。
+- **ユニットテスト**: [`tests/test_powertrain.py`](tests/test_powertrain.py) を新設し、全3件 PASSED。既存テストも含め全テストが正常に通過することを確認。
+

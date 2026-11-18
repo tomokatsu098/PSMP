@@ -10,7 +10,7 @@ Phase 2: IG-OFF Initial Power-Saving Planner (`phase2_ig_off_planner.py`)
 from dataclasses import dataclass, field
 from typing import Any, Dict, Tuple
 
-from psmp.config import DEVICE_SPECS, DriverPreferenceProfile, POIClusterSpec
+from psmp.config import DEVICE_SPECS, DriverPreferenceProfile, POIClusterSpec, PowertrainType
 from psmp.models.jev_engine import JevDecisionEngine
 from psmp.models.vehicle_devices import (
     BatteryThermalState,
@@ -154,6 +154,10 @@ class Phase2IGOffPlanner:
         ans_score = jev_resp["answers"]["precon_intensity_level"]
 
         policy_mode = PowerPolicyMode(ans_policy["choice"])
+        # パワートレイン別安全弁: BEV で SoC <= 20% の場合は車載DC-DC 12V補充電停止リスクのため EMERGENCY_SAVE に強制移行
+        if profile.powertrain_type == PowertrainType.BEV and event.initial_soc_pct <= 20.0:
+            policy_mode = PowerPolicyMode.EMERGENCY_SAVE
+
         # Score (0~4) を 0.45 ~ 1.0 の出力強度係数へ変換
         norm_intensity = round(0.45 + 0.55 * (float(ans_score["score"]) / 4.0), 3)
 
@@ -161,9 +165,14 @@ class Phase2IGOffPlanner:
         is_very_short_stay = stay_dist.mean_minutes <= 16.0
         is_extreme_temp = (event.ambient_temp_c >= 31.0) or (event.ambient_temp_c <= 5.0)
 
+        # パワートレイン別の機器制約:
+        # ICE / HEV はエンジン停止中の高圧プレ空調・バッテリー温調が不可能なため常時 OFF
+        is_high_voltage_ac_capable = profile.powertrain_type in (PowertrainType.BEV, PowertrainType.PHEV)
+
         # ① 空調 (HVAC): コンビニ等の超短時間駐車 かつ 猛暑/厳冬 かつ バジェット余裕ありなら ECO_HOLD で室温維持、それ以外は OFF
         if (
-            is_very_short_stay
+            is_high_voltage_ac_capable
+            and is_very_short_stay
             and is_extreme_temp
             and policy_mode in (PowerPolicyMode.COMFORT_FIRST, PowerPolicyMode.BALANCED)
             and budget_soc_pct >= 4.0
@@ -173,16 +182,18 @@ class Phase2IGOffPlanner:
             init_hvac = HVACState.OFF
 
         # ② IVI / ナビ / 通信: 20分以内の短時間駐車なら STANDBY (RAM保持)、それ以外は DEEP_SLEEP
-        if stay_dist.mean_minutes <= 20.0 and policy_mode != PowerPolicyMode.EMERGENCY_SAVE:
+        # ICE の場合はセルモーター始動性死守のため 10分以上の駐車は即時 DEEP_SLEEP
+        ivi_standby_limit = 10.0 if profile.powertrain_type == PowertrainType.ICE else 20.0
+        if stay_dist.mean_minutes <= ivi_standby_limit and policy_mode != PowerPolicyMode.EMERGENCY_SAVE:
             init_ivi = IVIState.STANDBY
         else:
             init_ivi = IVIState.DEEP_SLEEP
 
-        # ③ 駆動用バッテリー温調: IG-OFF直後は走行直後で温まっているため一旦 OFF へ移行
+        # ③ 駆動用バッテリー温調: IG-OFF直後は走行直後で温まっているため一旦 OFF へ移行 (ICE/HEVは非装備)
         init_batt = BatteryThermalState.OFF
 
-        # ④ 監視カメラ (Sentry): Jev判定とSoCガードに基づき決定
-        if policy_mode in (PowerPolicyMode.HOME_RANGE_GUARD, PowerPolicyMode.EMERGENCY_SAVE):
+        # ④ 監視カメラ (Sentry): Jev判定とSoCガードに基づき決定 (ICE/HEVは12V枯渇防止のためLOW_POWER_PIR固定)
+        if not is_high_voltage_ac_capable or policy_mode in (PowerPolicyMode.HOME_RANGE_GUARD, PowerPolicyMode.EMERGENCY_SAVE):
             init_sentry = SentryState.LOW_POWER_PIR
         elif ans_sentry["choice"] == "full_ai_sentry" and budget_soc_pct >= 6.0:
             init_sentry = SentryState.FULL_AI_SENTRY

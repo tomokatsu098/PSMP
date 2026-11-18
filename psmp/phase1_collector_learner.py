@@ -23,6 +23,7 @@ from psmp.config import (
     DriverPreferenceProfile,
     POIClusterSpec,
     POIType,
+    PowertrainType,
     classify_stay_duration_category,
     get_poi_default_category,
 )
@@ -200,14 +201,22 @@ class Phase1CollectorLearner:
                     ambient_c = round(float(rng.uniform(16.0, 24.5)), 1)
 
                 # 駐車開始時のバッテリーSoC (%)
-                # 帰宅必要SoCギリギリのシナリオも約20%混ぜてトレードオフ評価を可能にする
-                req_home_kwh = (poi.distance_to_home_km / profile.efficiency_km_per_kwh)
-                req_home_soc = (req_home_kwh / profile.battery_capacity_kwh) * 100.0 + profile.min_home_arrival_soc_pct
-                if rng.random() < 0.22:
-                    # 自宅無充電帰還に対して余裕が少ない（トレードオフが顕在化する）SoC状態
-                    initial_soc = round(float(rng.uniform(req_home_soc + 1.5, req_home_soc + 7.5)), 2)
+                # パワートレインに応じた帰還必要SoCと初期SoCの生成
+                if profile.powertrain_type in (PowertrainType.BEV, PowertrainType.PHEV):
+                    req_home_kwh = (poi.distance_to_home_km / profile.efficiency_km_per_kwh)
+                    req_home_soc = min(75.0, (req_home_kwh / profile.battery_capacity_kwh) * 100.0 + profile.min_home_arrival_soc_pct)
+                    if rng.random() < 0.22:
+                        # 自宅無充電帰還に対して余裕が少ない（トレードオフが顕在化する）SoC状態
+                        low_b = req_home_soc + 1.5
+                        high_b = max(low_b + 2.0, req_home_soc + 7.5)
+                        initial_soc = round(float(rng.uniform(low_b, high_b)), 2)
+                    else:
+                        low_b = max(35.0, req_home_soc + 10.0)
+                        high_b = max(low_b + 5.0, 88.0)
+                        initial_soc = round(float(rng.uniform(low_b, high_b)), 2)
                 else:
-                    initial_soc = round(float(rng.uniform(max(35.0, req_home_soc + 10.0), 88.0)), 2)
+                    # HEV / ICE はガソリン走行メインのため、通常SoC範囲 (45% ~ 85%) を生成
+                    initial_soc = round(float(rng.uniform(45.0, 85.0)), 2)
                 initial_soc = min(95.0, max(15.0, initial_soc))
 
                 # GPS座標に微小な駐車枠ノイズを付加

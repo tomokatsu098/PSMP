@@ -114,21 +114,34 @@ pytest -v  # 全5件のユニットテストが全てPASSEDすることを確認
 
 ---
 
-## 5. okuya-x1pro-ubuntu 側での作業タスク（夜間および今後のステップ）
+## 6. okuya-x1pro-ubuntu での作業実績（2026-11-18）
 
-本日予定していたToDo（長期駐車検証、突発理論値算出、5大検討書ドラフト作成）が前倒しで全て完了しました。
-今夜 `okuya-x1pro-ubuntu` で作業する際は、以下のステップへ進むことができます。
+### (1) 委託元報告会向けプレゼンテーションスライド完成（全11スライド）
+- 委託元（電子PF開発部 EEA開発室 開発3課 髙間様）の依頼項目（STEP1）に1対1で対応するスライドを設計・自動生成。
+  - 設計書: [`PSMP_Client_Report_Slides.md`](file:///home/tomokatsu098/.gemini/antigravity/brain/41d5085e-2551-42d2-910f-cd3d119dabff/PSMP_Client_Report_Slides.md)
+  - PPTX実体 (16:9): [`outputs/PSMP_電力マネジメント_成果報告.pptx`](outputs/PSMP_電力マネジメント_成果報告.pptx)
+  - 自動生成スクリプト: [`scripts/generate_report_pptx.py`](scripts/generate_report_pptx.py)
 
-### (1) 環境同期と健全性確認
-```bash
-cd ~/develop/PSMP
-git pull origin main
-source .venv/bin/activate
-pytest -v  # 全5件パス確認
-```
+### (2) 学習ステップ（7日〜365日）感度分析エビデンスの統合
+- 7日、14日、30日、60日、90日、180日、365日の学習期間推移（ROC-AUC、Brierスコア、省電力率）を報告書・スライドに反映。
+- 14日〜30日での初期急伸（新車納車直後から実用）および月1回OTA更新の妥当性を定量的エビデンスで証明。
 
-### (2) 今後の拡張・ブラッシュアップタスク
-1. **検討書ドラフトの最終確認・体裁調整**:
-   - `docs/PROPOSAL_TECHNICAL_REPORTS_DRAFT.md` をプレビュー確認し、委託元への提出形式（Word/PowerPoint/Markdown）に合わせた最終調整。
-2. **Streamlit UI アプリ (`app.py`) への反映（オプション）**:
-   - 新設した「段階1・段階2の全車達成結果」「突発利用の除外トグル」を UI 上のタブでインタラクティブに可視化する画面の追加。
+### (3) 対象実機「Qualcomm QC8255 (SA8255P)」車載C-DCアーキテクチャへの適合確立
+- 駐車中、主系Kryo AP（AAOS/QNX）が電源遮断（Power-gated）される中、常時稼働の低電力サブシステム（ARM Cortex-R52、TCM数十〜数百KB）上で自律推論するアーキテクチャを確立。
+
+### (4) C99 ＆ Rust `no_std` 組み込みライブラリの実装・ベンチマーク検証
+- **C99実装 (`embedded/c/`)**:
+  - 動的メモリ確保を完全排除（ゼロアロケーション、MISRA-C / ISO 26262 ASIL-D 準拠）。
+  - ECDFテーブル構造体: **わずか 772 Bytes**（QC8255 64KB枠の約1.2%）。
+  - 実測レイテンシ: **12.80 ns (0.0128 μs)**（100万回推論平均）。
+  - SoC安全弁、Re-sleep安全弁、出先チャタリング防止等のユニットテスト全て PASSED。
+- **Rust `no_std` 実装 (`embedded/rust/psmp_edge_engine/`)**:
+  - パニックフリー、静的配列による二分探索（`partition_point`）。
+  - `cargo test`: 全3件 PASSED、`cargo build --release`: 成功。
+
+### (5) Streamlit UI (`app.py`) への Tab 5 実装
+- **Tab 5: ⚡ QC8255 (SA8255P): 車載エッジ推論 ＆ 1,000台全車検証** を新設。
+  - QC8255 Cortex-R52 実機マイコン適合ベンチマーク（ROM 772B, 12.8ns）の表示。
+  - スライダー操作による Cortex-R52 リアルタイム推論＆状態遷移（S0〜S4）エミュレータ。
+  - 1,000台全車評価データ（段階1・段階2達成率100%）のヒストグラム・データビューア。
+

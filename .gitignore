@@ -24,4 +24,9 @@ past_materials/*:com.dropbox.attrs
 *.egg-info/
 build/
 dist/
+target/
+**/target/
+test_psmp_c
+**/test_psmp_c
+*.o
 

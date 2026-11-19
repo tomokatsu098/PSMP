@@ -88,7 +88,7 @@ def test_phase1_to_phase4_end_to_end():
     """Phase 1 〜 Phase 4 の一気通貫動作と ROC 感度評価・再調整フィードバックを検証"""
     p1 = Phase1CollectorLearner()
     records = p1.generate_synthetic_history(num_sessions_per_driver=40, seed=123)
-    assert len(records) == 120
+    assert len(records) == 40 * len(DEFAULT_DRIVER_PROFILES)
 
     # 時系列分割: 前半を学習、後半をテスト
     train_recs = [r for i, r in enumerate(records) if i % 4 != 0]
